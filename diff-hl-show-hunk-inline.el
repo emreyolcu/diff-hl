@@ -81,6 +81,10 @@ hidden content below it.  Each string includes any surrounding padding."
   :type '(cons (string :tag "Above")
                (string :tag "Below")))
 
+(defcustom diff-hl-show-hunk-inline-show-line-prefixes t
+  "If t, show diff line prefixes in inline popups."
+  :type 'boolean)
+
 (defun diff-hl-show-hunk-inline--splice (list offset length)
   "Compute a sublist of LIST starting at OFFSET, of LENGTH."
   (butlast
@@ -115,6 +119,19 @@ Compute it from LINES starting at INDEX with a WINDOW-SIZE."
 (defun diff-hl-show-hunk-inline--underline-face ()
   "Return the face used for inline popup underlines."
   `(:underline ,(if (>= emacs-major-version 29) '(:position t) t)))
+
+(defun diff-hl-show-hunk-inline--propertize-line (line)
+  "Return LINE formatted for inline popup content."
+  (let* ((prefix (and (not (string-empty-p line)) (aref line 0)))
+         (face (cond ((eq prefix ?+) 'diff-added)
+                     ((eq prefix ?-) 'diff-removed)))
+         (line (if (and (not diff-hl-show-hunk-inline-show-line-prefixes)
+                        (memq prefix '(?+ ?- ?\s)))
+                   (substring line 1)
+                 line)))
+    (if face
+        (propertize (if (string-empty-p line) " " line) 'face face)
+      line)))
 
 (defun diff-hl-show-hunk-inline--compute-header (width &optional header)
   "Compute the header of the popup.
@@ -349,13 +366,7 @@ BUFFER is a buffer with the hunk."
          (overlay diff-hl-show-hunk--original-overlay)
          (type (overlay-get overlay 'diff-hl-hunk-type))
          (point (if (eq type 'delete) (overlay-start overlay) (overlay-end overlay)))
-         (propertize-line (lambda (l)
-                            (propertize l 'face
-                                        (cond ((string-prefix-p "+" l)
-                                               'diff-added)
-                                              ((string-prefix-p "-" l)
-                                               'diff-removed)))))
-         (propertized-lines (mapcar propertize-line lines)))
+         (propertized-lines (mapcar #'diff-hl-show-hunk-inline--propertize-line lines)))
 
     (save-excursion
       ;; Save point in case the hunk is hidden, so next/previous works as expected
