@@ -413,6 +413,8 @@ BUFFER defaults to the current buffer."
 
 (defmacro diff-hl-with-diff-switches (body)
   `(progn
+     (defvar vc-git-diff-switches)
+     (defvar vc-hg-diff-switches)
      (defvar vc-svn-diff-switches)
      (defvar vc-fossil-diff-switches)
      (defvar vc-jj-diff-switches)
