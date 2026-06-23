@@ -419,15 +419,20 @@ BUFFER defaults to the current buffer."
      (defvar vc-fossil-diff-switches)
      (defvar vc-jj-diff-switches)
      (let ((vc-git-diff-switches
-            ;; https://github.com/dgutov/diff-hl/issues/67
-            (cons "-U0"
-                  ;; https://github.com/dgutov/diff-hl/issues/9
-                  (and (boundp 'vc-git-diff-switches)
-                       (listp vc-git-diff-switches)
-                       (cl-remove-if-not
-                        (lambda (arg)
-                          (member arg '("--histogram" "--patience" "--minimal" "--textconv")))
-                        vc-git-diff-switches))))
+            (append
+             (list
+              ;; https://github.com/dgutov/diff-hl/issues/67
+              "-U0"
+              ;; Don't let Git shift hunk boundaries.
+              "--no-indent-heuristic")
+             ;; https://github.com/dgutov/diff-hl/issues/9
+             (and (boundp 'vc-git-diff-switches)
+                  (listp vc-git-diff-switches)
+                  (cl-remove-if-not
+                   (lambda (arg)
+                     (member arg '("--histogram" "--patience" "--minimal" "--textconv"
+                                   "--indent-heuristic" "--no-indent-heuristic")))
+                   vc-git-diff-switches))))
            (vc-hg-diff-switches nil)
            (vc-svn-diff-switches nil)
            (vc-fossil-diff-switches '("-c" "0"))
