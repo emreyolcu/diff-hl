@@ -40,6 +40,7 @@
 (define-obsolete-variable-alias 'diff-hl-inline-popup-transient-mode-map 'diff-hl-show-hunk-inline-transient-mode-map "0.11.0")
 
 (defvar diff-hl-show-hunk-inline--current-popup nil "The overlay of the current inline popup.")
+(defvar diff-hl-show-hunk-inline--fallback-window nil "The window used to show the current fallback buffer.")
 (defvar diff-hl-show-hunk-inline--current-lines nil "A list of the lines to show in the popup.")
 (defvar diff-hl-show-hunk-inline--current-index nil "First line showed in popup.")
 (defvar diff-hl-show-hunk-inline--invoking-command nil "Command that invoked the popup.")
@@ -50,6 +51,7 @@
 (defvar diff-hl-show-hunk-inline--close-hook nil "Function to be called when the popup closes.")
 
 (make-variable-buffer-local 'diff-hl-show-hunk-inline--current-popup)
+(make-variable-buffer-local 'diff-hl-show-hunk-inline--fallback-window)
 (make-variable-buffer-local 'diff-hl-show-hunk-inline--current-lines)
 (make-variable-buffer-local 'diff-hl-show-hunk-inline--current-index)
 (make-variable-buffer-local 'diff-hl-show-hunk-inline--current-header)
@@ -219,25 +221,39 @@ FOOTER are showed at start and end."
       (put-text-property 0 1 'cursor 0 str)
       (overlay-put diff-hl-show-hunk-inline--current-popup 'before-string str))))
 
+(defun diff-hl-show-hunk-inline--scroll-fallback-window (arg)
+  "Scroll the current fallback window.
+Pass ARG to `scroll-up'."
+  (when (window-live-p diff-hl-show-hunk-inline--fallback-window)
+    (with-selected-window diff-hl-show-hunk-inline--fallback-window
+      (condition-case nil
+          (scroll-up arg)
+        ((beginning-of-buffer end-of-buffer) nil)))
+    t))
+
 (defun diff-hl-show-hunk-inline--popup-down()
   "Scrolls one line down."
   (interactive)
-  (diff-hl-show-hunk-inline-scroll-to (1+ diff-hl-show-hunk-inline--current-index) ))
+  (or (diff-hl-show-hunk-inline--scroll-fallback-window 1)
+      (diff-hl-show-hunk-inline-scroll-to (1+ diff-hl-show-hunk-inline--current-index) )))
 
 (defun diff-hl-show-hunk-inline--popup-up()
   "Scrolls one line up."
   (interactive)
-  (diff-hl-show-hunk-inline-scroll-to (1- diff-hl-show-hunk-inline--current-index) ))
+  (or (diff-hl-show-hunk-inline--scroll-fallback-window -1)
+      (diff-hl-show-hunk-inline-scroll-to (1- diff-hl-show-hunk-inline--current-index) )))
 
 (defun diff-hl-show-hunk-inline--popup-pagedown()
   "Scrolls one page down."
   (interactive)
-  (diff-hl-show-hunk-inline-scroll-to (+ diff-hl-show-hunk-inline--current-index  diff-hl-show-hunk-inline--height) ))
+  (or (diff-hl-show-hunk-inline--scroll-fallback-window nil)
+      (diff-hl-show-hunk-inline-scroll-to (+ diff-hl-show-hunk-inline--current-index  diff-hl-show-hunk-inline--height) )))
 
 (defun diff-hl-show-hunk-inline--popup-pageup()
   "Scrolls one page up."
   (interactive)
-  (diff-hl-show-hunk-inline-scroll-to (-  diff-hl-show-hunk-inline--current-index diff-hl-show-hunk-inline--height) ))
+  (or (diff-hl-show-hunk-inline--scroll-fallback-window '-)
+      (diff-hl-show-hunk-inline-scroll-to (-  diff-hl-show-hunk-inline--current-index diff-hl-show-hunk-inline--height) )))
 
 (defvar diff-hl-show-hunk-inline-transient-mode-map
   (let ((map (make-sparse-keymap)))
@@ -261,6 +277,13 @@ FOOTER are showed at start and end."
   "Keymap for command `diff-hl-show-hunk-inline-transient-mode'.
 Capture all the vertical movement of the point, and converts it
 to scroll in the popup")
+
+(defvar diff-hl-show-hunk-inline--fallback-buffer-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map diff-hl-show-hunk-map)
+    (define-key map (kbd "q") #'diff-hl-show-hunk-hide)
+    map)
+  "Keymap for fallback hunk buffers.")
 
 (defun diff-hl-show-hunk-inline--ignorable-command-p (command)
   "Decide if COMMAND is a command allowed while showing an inline popup."
@@ -290,12 +313,42 @@ to scroll in the popup")
                        diff-hl-show-hunk-inline--current-custom-keymap)
     (add-hook 'post-command-hook #'diff-hl-show-hunk-inline--post-command-hook 0 t)))
 
+(defun diff-hl-show-hunk-inline--hide-fallback-window ()
+  "Hide the current fallback window."
+  (when (window-live-p diff-hl-show-hunk-inline--fallback-window)
+    (quit-window nil diff-hl-show-hunk-inline--fallback-window))
+  (setq diff-hl-show-hunk-inline--fallback-window nil))
+
+(defun diff-hl-show-hunk-inline--mode-line-quote (string)
+  "Quote STRING for display as a mode line construct."
+  (replace-regexp-in-string "%" "%%" string nil t))
+
+(defun diff-hl-show-hunk-inline--show-fallback (buffer header footer)
+  "Show BUFFER in a fallback window with HEADER and FOOTER."
+  (with-current-buffer buffer
+    (setq header-line-format
+          (list " " (diff-hl-show-hunk-inline--mode-line-quote header)))
+    (setq mode-line-format
+          (list " " (diff-hl-show-hunk-inline--mode-line-quote footer)))
+    (setq-local buffer-quit-function #'diff-hl-show-hunk-hide)
+    (use-local-map
+     (make-composed-keymap diff-hl-show-hunk-inline--fallback-buffer-map
+                           (current-local-map))))
+  (setq diff-hl-show-hunk-inline--fallback-window
+        (display-buffer
+         buffer
+         '((display-buffer-reuse-window
+            display-buffer-pop-up-window
+            display-buffer-use-some-window)
+           (inhibit-same-window . t)))))
+
 ;;;###autoload
 (defun diff-hl-show-hunk-inline-hide()
   "Hide the current inline popup."
   (interactive)
   (when diff-hl-show-hunk-inline-transient-mode
     (diff-hl-show-hunk-inline-transient-mode -1))
+  (diff-hl-show-hunk-inline--hide-fallback-window)
   (when diff-hl-show-hunk-inline--close-hook
     (funcall diff-hl-show-hunk-inline--close-hook)
     (setq diff-hl-show-hunk-inline--close-hook nil))
@@ -342,6 +395,7 @@ is closed."
   (interactive)
   (when diff-hl-show-hunk-inline-transient-mode
     (diff-hl-show-hunk-inline-transient-mode -1))
+  (diff-hl-show-hunk-inline--hide-fallback-window)
   (setq diff-hl-show-hunk-inline--current-popup nil)
   (let* ((all-overlays (overlays-in (point-min) (point-max)))
          (overlays (cl-remove-if-not (lambda (o)(overlay-get o 'diff-hl-show-hunk-inline)) all-overlays)))
@@ -355,7 +409,6 @@ BUFFER is a buffer with the hunk."
   ;; prevent diff-hl-show-hunk-inline-hide from being called twice
   (let ((diff-hl-show-hunk-inline--close-hook nil))
     (diff-hl-show-hunk-inline-hide))
-  (setq diff-hl-show-hunk--hide-function #'diff-hl-show-hunk-inline-hide)
   (let* ((lines (split-string (with-current-buffer buffer (buffer-string)) "[\n\r]+" ))
          (smart-lines diff-hl-show-hunk-inline-smart-lines)
          (original-lines-number (cl-count-if (lambda (s) (string-prefix-p "-" s)) lines))
@@ -366,43 +419,67 @@ BUFFER is a buffer with the hunk."
          (overlay diff-hl-show-hunk--original-overlay)
          (type (overlay-get overlay 'diff-hl-hunk-type))
          (point (if (eq type 'delete) (overlay-start overlay) (overlay-end overlay)))
-         (propertized-lines (mapcar #'diff-hl-show-hunk-inline--propertize-line lines)))
+         (height (when smart-lines
+                   (when (not (eq 0 original-lines-number))
+                     original-lines-number)))
+         (header (if (and (boundp 'diff-hl-reference-revision) diff-hl-reference-revision)
+                     (concat "Diff with " diff-hl-reference-revision)
+                   "Diff with HEAD"))
+         (footer "(q)Quit  (p)Previous  (n)Next  (r)Revert  (c)Copy original")
+         (source-height
+          (count-screen-lines (overlay-start overlay) (overlay-end overlay)))
+         (popup-height (+ (diff-hl-show-hunk-inline--compute-content-height
+                           (or height (length lines)))
+                          (if (display-graphic-p) 2 3))))
+    (unless diff-hl-show-staged-changes
+      (setq footer (concat footer " (S)Stage")))
 
-    (save-excursion
-      ;; Save point in case the hunk is hidden, so next/previous works as expected
-      ;; If the hunk is delete type, then don't hide the hunk
-      ;; (because the hunk is located in a non deleted line)
-      (when (and diff-hl-show-hunk-inline-hide-hunk
-                 (not (eq type 'delete)))
-        (let* ((invisible-overlay (make-overlay (overlay-start overlay)
-                                                (overlay-end overlay))))
-          ;; Make new overlay, since the diff-hl overlay can be changed by diff-hl-flydiff
-          (overlay-put invisible-overlay 'invisible t)
-          ;; Change default hide popup function, to make the overlay visible
-          (setq diff-hl-show-hunk--hide-function
-                (lambda ()
-                  (overlay-put invisible-overlay 'invisible nil)
-                  (delete-overlay invisible-overlay)
-                  (diff-hl-show-hunk-inline-hide)))))
-      (diff-hl-show-hunk--goto-hunk-overlay overlay)
-      (let ((height
-             (when smart-lines
-               (when (not (eq 0 original-lines-number))
-                 original-lines-number)))
-            (footer "(q)Quit  (p)Previous  (n)Next  (r)Revert  (c)Copy original"))
-        (unless diff-hl-show-staged-changes
-          (setq footer (concat footer " (S)Stage")))
-        (diff-hl-show-hunk-inline-show
-         propertized-lines
-         (if (and (boundp 'diff-hl-reference-revision) diff-hl-reference-revision)
-             (concat "Diff with " diff-hl-reference-revision)
-           "Diff with HEAD")
-         footer
-         diff-hl-show-hunk-map
-         #'diff-hl-show-hunk-hide
-         point
-         height))
-      )))
+    (if (> (+ source-height popup-height) (window-body-height))
+        (progn
+          (setq diff-hl-show-hunk--hide-function #'diff-hl-show-hunk-inline-hide)
+          (diff-hl-show-hunk-inline--show-fallback buffer header footer)
+          (setq diff-hl-show-hunk-inline--invoking-command this-command)
+          (setq diff-hl-show-hunk-inline--current-custom-keymap diff-hl-show-hunk-map)
+          (setq diff-hl-show-hunk-inline--close-hook #'diff-hl-show-hunk-hide)
+          (diff-hl-show-hunk-inline-transient-mode 1))
+      (setq diff-hl-show-hunk--hide-function #'diff-hl-show-hunk-inline-hide)
+      (let ((propertized-lines
+             (mapcar #'diff-hl-show-hunk-inline--propertize-line lines)))
+        (save-excursion
+          ;; Save point in case the hunk is hidden, so next/previous works as expected
+          ;; If the hunk is delete type, then don't hide the hunk
+          ;; (because the hunk is located in a non deleted line)
+          (when (and diff-hl-show-hunk-inline-hide-hunk
+                     (not (eq type 'delete)))
+            (let* ((invisible-overlay (make-overlay (overlay-start overlay)
+                                                    (overlay-end overlay))))
+              ;; Make new overlay, since the diff-hl overlay can be changed by diff-hl-flydiff
+              (overlay-put invisible-overlay 'invisible t)
+              ;; Change default hide popup function, to make the overlay visible
+              (setq diff-hl-show-hunk--hide-function
+                    (lambda ()
+                      (overlay-put invisible-overlay 'invisible nil)
+                      (delete-overlay invisible-overlay)
+                      (diff-hl-show-hunk-inline-hide)))))
+          (diff-hl-show-hunk--goto-hunk-overlay overlay)
+          (let ((overflow (- (+ (count-screen-lines (window-start)
+                                                    (overlay-end overlay))
+                                popup-height)
+                             (window-body-height))))
+            (when (< 0 overflow)
+              (set-window-start nil
+                                (save-excursion
+                                  (goto-char (window-start))
+                                  (vertical-motion overflow)
+                                  (point)))))
+          (diff-hl-show-hunk-inline-show
+           propertized-lines
+           header
+           footer
+           diff-hl-show-hunk-map
+           #'diff-hl-show-hunk-hide
+           point
+           height))))))
 
 (define-obsolete-function-alias 'diff-hl-inline-popup--splice 'diff-hl-show-hunk-inline--splice "0.11.0")
 (define-obsolete-function-alias 'diff-hl-inline-popup--ensure-enough-lines 'diff-hl-show-hunk-inline--ensure-enough-lines "0.11.0")
